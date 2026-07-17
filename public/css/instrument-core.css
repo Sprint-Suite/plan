@@ -34,6 +34,14 @@
   .ins[data-app="plan"] [data-epic-colour="green"]   { --epic:oklch(0.52 0.09 162); }
   .ins[data-app="plan"] [data-epic-colour="moss"]    { --epic:oklch(0.55 0.09 140); }
   .ins[data-app="plan"] [data-epic-colour="magenta"] { --epic:oklch(0.52 0.11 320); }
+  /* sight: watermelon semantics. rind=--green=reported, pith=reconciliation,
+     flesh=--melon=actual, seeds=evidence. --melon is the accent and the
+     divergence colour; it is never a primary button. --green stays .btn-pri. */
+  .ins[data-app="sight"] {
+    --melon:oklch(0.53 0.19 24); --melonwash:oklch(0.95 0.045 24); --melondeep:oklch(0.43 0.16 20);
+    --seed:oklch(0.20 0.02 40); --pithcream:oklch(0.94 0.035 130); --rinddark:oklch(0.28 0.07 148);
+    --accent:var(--melon);
+  }
   .ins *{box-sizing:border-box; margin:0;}
   .ins h1,.ins h2,.ins h3,.ins .disp{font-family:'Bricolage Grotesque',sans-serif; font-weight:700; letter-spacing:-0.02em;}
   .ins .mono{font-family:'IBM Plex Mono',monospace;}

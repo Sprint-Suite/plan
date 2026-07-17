@@ -35,4 +35,20 @@
       <rect x="8.5" y="16.8" width="9" height="4.2" rx="1.4"/>
     </g>
   </symbol>
+  <!-- Half-melon: flat cut face on top, domed rind below, three seeds.
+       Use #glyph-sight at >=24px. Below that the seeds turn to mud, so
+       use #glyph-sight-sm, which drops them. -->
+  <symbol id="glyph-sight" viewBox="0 0 24 24" fill="none">
+    <path d="M2.5 8.5h19a9.5 9.5 0 0 1-19 0z" fill="currentColor" opacity="0.42"/>
+    <path d="M2.5 8.5h19a9.5 9.5 0 0 1-19 0z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    <g fill="currentColor">
+      <circle cx="8.6" cy="12.4" r="1.15"/>
+      <circle cx="12" cy="14.9" r="1.15"/>
+      <circle cx="15.4" cy="12.4" r="1.15"/>
+    </g>
+  </symbol>
+  <symbol id="glyph-sight-sm" viewBox="0 0 24 24" fill="none">
+    <path d="M2.5 8.5h19a9.5 9.5 0 0 1-19 0z" fill="currentColor" opacity="0.42"/>
+    <path d="M2.5 8.5h19a9.5 9.5 0 0 1-19 0z" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+  </symbol>
 </svg>
