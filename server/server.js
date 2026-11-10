@@ -163,7 +163,15 @@ export async function startSpikeServer({ db, port = 0, serveStatic = false, seed
     broadcast(id, { type: "presence", participants });
   };
 
-  httpServer.on("upgrade", async (req, socket, head) => {
+  httpServer.on("upgrade", (req, socket, head) => {
+    socket.on("error", (e) => console.error("upgrade socket error:", e.message));
+    handleUpgrade(req, socket, head).catch((e) => {
+      console.error("ws upgrade failed:", e);
+      socket.destroy();
+    });
+  });
+
+  const handleUpgrade = async (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const roomId = url.searchParams.get("room") ?? "";
     const token = url.searchParams.get("token");
@@ -192,7 +200,7 @@ export async function startSpikeServer({ db, port = 0, serveStatic = false, seed
       join(roomId, ws);
       wss.emit("connection", ws, req);
     });
-  });
+  };
 
   wss.on("connection", (ws) => {
     const { roomId, identity } = /** @type {any} */ (ws).meta;
@@ -201,39 +209,51 @@ export async function startSpikeServer({ db, port = 0, serveStatic = false, seed
     ws.send(JSON.stringify({ type: "state", doc: room.doc, version: room.version, identity }));
     broadcastPresence(roomId); // tell the room (incl. the new joiner) who's here
 
+    ws.on("error", (e) => console.error("ws socket error:", e.message));
     ws.on("message", (data) => {
-      let msg;
-      try { msg = JSON.parse(data.toString()); } catch { return; }
-
-      // Ephemeral cursor relay (phase2-build5, R1): a pure side-channel. Stamp the
-      // sender's stable id and fan out to the OTHER sockets only; NEVER applyOp,
-      // NEVER touch room.doc/room.version, NEVER commit. The relayed frame is
-      // RECONSTRUCTED from {id, x/y | gone} — never the raw client object — and a
-      // position with non-finite coords is dropped, not forwarded.
-      if (msg.type === "cursor") {
-        const id = /** @type {any} */ (ws).meta.id;
-        if (msg.gone === true) {
-          broadcastExcept(roomId, ws, { type: "cursor", id, gone: true });
-        } else if (Number.isFinite(msg.x) && Number.isFinite(msg.y)) {
-          broadcastExcept(roomId, ws, { type: "cursor", id, x: msg.x, y: msg.y });
-        }
-        return;
-      }
-
-      if (msg.type !== "op") return;
-
-      const result = applyOp(db, room, { type: msg.op?.type, payload: msg.op?.payload });
-      if (result.ok) {
-        // Broadcast the EFFECTIVE op (the merged full-field payload for EDIT_STORY),
-        // so every client reduces a complete payload (MP3 R4).
-        broadcast(roomId, { type: "op", opId: msg.opId, op: result.op, version: result.version });
-      } else {
-        ws.send(JSON.stringify({ type: "nack", opId: msg.opId, reason: result.reason }));
+      try {
+        handleMessage(ws, roomId, room, data);
+      } catch (e) {
+        console.error("ws message handling failed:", e);
       }
     });
 
     ws.on("close", () => { leave(roomId, ws); broadcastPresence(roomId); });
   });
+
+  const handleMessage = (ws, roomId, room, data) => {
+    let msg;
+    try { msg = JSON.parse(data.toString()); } catch { return; }
+    if (msg === null || typeof msg !== "object" || Array.isArray(msg)) return;
+
+    // Ephemeral cursor relay (phase2-build5, R1): a pure side-channel. Stamp the
+    // sender's stable id and fan out to the OTHER sockets only; NEVER applyOp,
+    // NEVER touch room.doc/room.version, NEVER commit. The relayed frame is
+    // RECONSTRUCTED from {id, x/y | gone} — never the raw client object — and a
+    // position with non-finite coords is dropped, not forwarded.
+    if (msg.type === "cursor") {
+      const id = /** @type {any} */ (ws).meta.id;
+      if (msg.gone === true) {
+        broadcastExcept(roomId, ws, { type: "cursor", id, gone: true });
+      } else if (Number.isFinite(msg.x) && Number.isFinite(msg.y)) {
+        broadcastExcept(roomId, ws, { type: "cursor", id, x: msg.x, y: msg.y });
+      }
+      return;
+    }
+
+    if (msg.type !== "op") return;
+    // Echoed in the ack/nack, so bound it before anything commits.
+    if (typeof msg.opId !== "string" || msg.opId.length > 64) return;
+
+    const result = applyOp(db, room, { type: msg.op?.type, payload: msg.op?.payload });
+    if (result.ok) {
+      // Broadcast the EFFECTIVE op (the merged full-field payload for EDIT_STORY),
+      // so every client reduces a complete payload (MP3 R4).
+      broadcast(roomId, { type: "op", opId: msg.opId, op: result.op, version: result.version });
+    } else {
+      ws.send(JSON.stringify({ type: "nack", opId: msg.opId, reason: result.reason }));
+    }
+  };
 
   return new Promise((resolve) => {
     httpServer.listen(port, host, () => {
