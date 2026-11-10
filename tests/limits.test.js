@@ -29,6 +29,14 @@ test("window limiter caps each key independently over a rolling window", () => {
   assert.equal(limiter.allow("u1"), true);
 });
 
+test("window limiter can check without recording", () => {
+  const limiter = createWindowLimiter({ max: 1, windowMs: 1000, now: () => 0 });
+  assert.equal(limiter.check("u1"), true);
+  assert.equal(limiter.check("u1"), true, "checking alone uses nothing");
+  limiter.record("u1");
+  assert.equal(limiter.check("u1"), false);
+});
+
 test("window limiter drops idle keys once their window has passed", () => {
   const c = clock();
   const limiter = createWindowLimiter({ max: 5, windowMs: 1000, now: c.now });

@@ -34,19 +34,21 @@ export function createRoomHub({ db, limits }) {
     else reserved.delete(id);
   };
 
-  /** @param {WebSocket} ws @param {string} json */
-  function sendRaw(ws, json) {
-    if (ws.readyState !== WebSocket.OPEN) return;
-    if (ws.bufferedAmount > limits.maxBufferedBytes) {
-      ws.terminate();
-      return;
-    }
-    ws.send(json);
-  }
+  /** False (and the socket cut off) when it is closed or its backlog is over the limit. */
+  const writable = (/** @type {WebSocket} */ ws) => {
+    if (ws.readyState !== WebSocket.OPEN) return false;
+    if (ws.bufferedAmount <= limits.maxBufferedBytes) return true;
+    ws.terminate();
+    return false;
+  };
+  const sendRaw = (/** @type {WebSocket} */ ws, /** @type {string} */ json) => { if (writable(ws)) ws.send(json); };
 
   return {
     /** @param {WebSocket} ws @param {any} msg */
     send: (ws, msg) => sendRaw(ws, JSON.stringify(msg)),
+
+    /** Answer a ping, echoing its payload, under the same backlog guard. */
+    pong: (/** @type {WebSocket} */ ws, /** @type {Buffer} */ data) => { if (writable(ws)) ws.pong(data); },
 
     /** Fan out to the room, optionally skipping one socket. */
     broadcast(/** @type {string} */ id, /** @type {any} */ msg, /** @type {WebSocket | null} */ except = null) {

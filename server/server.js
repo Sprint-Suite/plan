@@ -80,10 +80,11 @@ function mountCreateRoom(app, { db, provider, limits, now }) {
     if (Buffer.byteLength(JSON.stringify(doc.plan), "utf8") > limits.maxDocBytes) {
       return res.status(413).json({ error: "the plan is too large" });
     }
-    if (!perUser.allow(userId)) return res.status(429).json({ error: "too many rooms created; try again later" });
+    if (!perUser.check(userId)) return res.status(429).json({ error: "too many rooms created; try again later" });
     const id = `${companyId}-${newId("room")}`;
     const shareToken = newId("share");
     createRoom(db, { id, companyId, shareToken, mode, doc: doc.plan });
+    perUser.record(userId); // only a room that was actually created counts
     res.json({ id, companyId, shareToken, mode });
   });
 }
@@ -118,7 +119,8 @@ export async function startSpikeServer({ db, port = 0, serveStatic = false, seed
   if (serveStatic) app.use(express.static(pathJoin(__dirname, "..", "public")));
 
   const httpServer = createServer(app);
-  const wss = new WebSocketServer({ noServer: true, maxPayload: limits.maxFrameBytes });
+  // autoPong off: pongs go through the hub's backlog guard like every other send.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: limits.maxFrameBytes, autoPong: false });
   const hub = createRoomHub({ db, limits });
   const ctx = { db, provider, limits, now, hub, wss };
   attachUpgrades(httpServer, ctx);
@@ -226,6 +228,7 @@ function onConnection(/** @type {any} */ ctx, /** @type {any} */ ws, /** @type {
   hub.send(ws, { type: "state", doc: room.doc, version: room.version, identity });
   broadcastPresence(hub, roomId);
   ws.on("error", (/** @type {Error} */ e) => console.error("ws socket error:", e.message));
+  ws.on("ping", (/** @type {Buffer} */ data) => hub.pong(ws, data));
   ws.on("message", (/** @type {any} */ data) => {
     try {
       handleMessage(ctx, ws, room, data);

@@ -46,7 +46,8 @@ export function createTokenBucket({ rate, burst, now = Date.now }) {
  * At most `max` events per key in any rolling `windowMs`. Every call sweeps
  * expired timestamps across all keys, so idle keys do not accumulate.
  * @param {{ max: number, windowMs: number, now?: () => number }} opts
- * @returns {{ allow: (key: string) => boolean, size: () => number }}
+ * check() only tests; record() spends; allow() does both.
+ * @returns {{ check: (key: string) => boolean, record: (key: string) => void, allow: (key: string) => boolean, size: () => number }}
  */
 export function createWindowLimiter({ max, windowMs, now = Date.now }) {
   /** @type {Map<string, number[]>} */
@@ -58,13 +59,19 @@ export function createWindowLimiter({ max, windowMs, now = Date.now }) {
       else events.delete(key);
     }
   };
+  const check = (/** @type {string} */ key) => {
+    sweep(now());
+    return (events.get(key)?.length ?? 0) < max;
+  };
+  const record = (/** @type {string} */ key) => {
+    events.set(key, [...(events.get(key) ?? []), now()]);
+  };
   return {
+    check,
+    record,
     allow(key) {
-      const t = now();
-      sweep(t);
-      const times = events.get(key) ?? [];
-      if (times.length >= max) return false;
-      events.set(key, [...times, t]);
+      if (!check(key)) return false;
+      record(key);
       return true;
     },
     size: () => events.size,

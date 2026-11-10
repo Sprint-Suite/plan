@@ -313,3 +313,26 @@ test("room creation is limited per user, independently", async () => {
   assert.equal(await create("rl-u2"), 200);
   server.close(); db.close();
 });
+
+test("a client that floods pings but never reads is cut off (pongs are guarded too)", async () => {
+  const { db, server } = await boot({ limits: { maxBufferedBytes: 16 * 1024 } });
+  const a = await join(server);
+  /** @type {any} */ (a.ws)._socket.pause();
+  const payload = Buffer.alloc(125, 1);
+  for (let i = 0; i < 40_000; i++) a.ws.ping(payload);
+  await until(() => server.socketCount("r") === 0, 10_000);
+  a.ws.terminate(); server.close(); db.close();
+});
+
+test("a failed room creation does not use up the creator's quota", async () => {
+  registerTestSession("rl-fail", { userId: "rl-fail-user", company: "acme", entitled: true });
+  const { db, server } = await boot({ limits: { roomsPerUserPerHour: 1 } });
+  const create = () => fetch(`${server.httpUrl}/rooms`, {
+    method: "POST", headers: { "content-type": "application/json", "x-spike-session": "rl-fail" }, body: "{}",
+  }).then((r) => r.status);
+  db.exec("CREATE TRIGGER refuse_insert BEFORE INSERT ON rooms BEGIN SELECT RAISE(ABORT, 'disk full'); END;");
+  assert.equal(await create(), 500);
+  db.exec("DROP TRIGGER refuse_insert");
+  assert.equal(await create(), 200);
+  server.close(); db.close();
+});
