@@ -177,7 +177,7 @@ test("case 5b: an EDIT_STORY delta naming a deleted story is rejected — no sil
     // Merged against a now-absent story, the partial lacks points → validatePlan rejects.
     const late = applyOp(db, room, { type: "EDIT_STORY", payload: { id: "S1", title: "zombie" }, baseVersion: room.version });
     assert.equal(late.ok, false);
-    assert.match(late.reason, /unknown epic|points/); // the partial fails validatePlan
+    assert.match(late.reason, /S1/); // the partial story record fails validatePlan
 
     assert.equal("S1" in loadRoom(db, "acme-q3").doc.stories, false, "deleted story not resurrected");
   } finally { cleanup(); }

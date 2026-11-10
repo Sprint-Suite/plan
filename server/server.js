@@ -25,7 +25,7 @@ import { makeSecurityHeaders } from "./middleware/securityHeaders.js";
 import { applyOp } from "./rooms.js";
 import { createAuthProvider } from "./auth.js";
 import { createInitialState } from "../public/js/store.js";
-import { validatePlan } from "../public/js/plan-io.js";
+import { validatePlan, migratePlan } from "../public/js/plan-io.js";
 import { newId } from "../public/js/ids.js";
 import { PALETTE, paletteColour, pickColourIndex } from "../public/js/cursors.js";
 
@@ -104,9 +104,10 @@ export async function startSpikeServer({ db, port = 0, serveStatic = false, seed
     // an empty starting board.
     let doc;
     if (req.body?.plan != null) {
-      const v = validatePlan(req.body.plan);
+      const m = migratePlan(req.body.plan);
+      const v = m.ok ? validatePlan(m.plan) : m;
       if (!v.ok) return res.status(400).json({ error: v.reason });
-      doc = { ...req.body.plan, lastReturnedStoryIds: [] };
+      doc = { ...v.plan, lastReturnedStoryIds: [] };
     } else {
       doc = createInitialState("2026-01-05");
     }

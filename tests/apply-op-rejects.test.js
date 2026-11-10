@@ -35,7 +35,7 @@ test("applyOp rejects when the commit fails, leaving the room unchanged", () => 
   const { db, room } = freshRoom();
   const before = room.doc;
   db.close();
-  const result = applyOp(db, room, { type: "SET_PLAN_TITLE", payload: { title: "x" } });
+  const result = applyOp(db, room, { type: "SET_PLAN_TITLE", payload: "x" });
   assert.equal(result.ok, false);
   assert.equal(room.version, 0);
   assert.equal(room.doc, before);
@@ -50,4 +50,46 @@ test("applyOp rejects an op whose payload cannot be serialised for broadcast, be
   assert.equal(result.ok, false);
   assert.equal(room.version, 0);
   assert.equal(/** @type {any} */ (loadRoom(db, "r")).version, 0);
+});
+
+/** A room holding epic E1 with story a, plus an unparented story d. */
+function populatedRoom() {
+  const { db, room } = freshRoom();
+  for (const op of [
+    { type: "ADD_EPIC", payload: { id: "E1", title: "One" } },
+    { type: "ADD_STORY", payload: { id: "a", title: "A", summary: "", points: 3, epicId: "E1" } },
+    { type: "ADD_STORY", payload: { id: "d", title: "D", summary: "", points: 2, epicId: null } },
+  ]) assert.equal(applyOp(db, room, op).ok, true);
+  return { db, room };
+}
+
+const MISSHAPEN_COMMANDS = [
+  { name: "ADD_EPIC reusing an existing epic id", op: { type: "ADD_EPIC", payload: { id: "E1", title: "Replaced" } } },
+  { name: "ADD_EPIC with a non-string id", op: { type: "ADD_EPIC", payload: { id: 7, title: "Seven" } } },
+  { name: "MOVE_STORY with an unknown target kind", op: { type: "MOVE_STORY", payload: { storyId: "d", target: { kind: "typo", index: 0 }, beforeId: null } } },
+  { name: "MOVE_STORY with a fractional sprint index", op: { type: "MOVE_STORY", payload: { storyId: "d", target: { kind: "sprint", index: 0.5 }, beforeId: null } } },
+  { name: "MOVE_STORY with an out-of-range sprint index", op: { type: "MOVE_STORY", payload: { storyId: "d", target: { kind: "sprint", index: 99 }, beforeId: null } } },
+  { name: "DELETE_EPIC with no mode", op: { type: "DELETE_EPIC", payload: { id: "E1" } } },
+  { name: "DELETE_EPIC with an unknown mode", op: { type: "DELETE_EPIC", payload: { id: "E1", mode: "typo" } } },
+  { name: "DELETE_EPIC with a null id (would delete every unparented story)", op: { type: "DELETE_EPIC", payload: { id: null, mode: "delete" } } },
+];
+
+for (const { name, op } of MISSHAPEN_COMMANDS) {
+  test(`applyOp rejects ${name}, leaving the room untouched`, () => {
+    const { db, room } = populatedRoom();
+    const before = structuredClone(room.doc);
+    const version = room.version;
+    const result = applyOp(db, room, /** @type {any} */ (op));
+    assert.equal(result.ok, false);
+    assert.equal(room.version, version);
+    assert.deepEqual(room.doc, before);
+    assert.equal(/** @type {any} */ (loadRoom(db, "r")).version, version);
+  });
+}
+
+test("DELETE_EPIC on an unknown string id stays a harmless no-op", () => {
+  const { db, room } = populatedRoom();
+  const result = applyOp(db, room, { type: "DELETE_EPIC", payload: { id: "nope", mode: "delete" } });
+  assert.equal(result.ok, true);
+  assert.deepEqual(Object.keys(room.doc.stories).sort(), ["a", "d"]);
 });

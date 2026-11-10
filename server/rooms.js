@@ -36,6 +36,27 @@ const ALLOWED = new Set([
 /** @typedef {{ ok: true, version: number, op: { type: string, payload: any } } | { ok: false, reason: string }} OpResult */
 
 /**
+ * Command checks for ops whose resulting document can be valid yet still wrong
+ * (validatePlan cannot tell a malformed command from an intended one).
+ * @param {any} doc @param {string} type @param {any} p
+ * @returns {string | null} a rejection reason, or null when acceptable
+ */
+function checkCommand(doc, type, p) {
+  if (type === "ADD_EPIC" && (typeof p?.id !== "string" || Object.hasOwn(doc.epics, p.id))) {
+    return "an epic needs a new id";
+  }
+  if (type === "MOVE_STORY") {
+    const t = p?.target;
+    const sprintOk = t?.kind === "sprint" && Number.isInteger(t.index) && t.index >= 0 && t.index < doc.sprints.length;
+    if (t?.kind !== "backlog" && !sprintOk) return "invalid move destination";
+  }
+  if (type === "DELETE_EPIC" && (typeof p?.id !== "string" || !["reparent", "delete"].includes(p?.mode))) {
+    return "invalid epic delete";
+  }
+  return null;
+}
+
+/**
  * Apply one op to the room's authoritative document, persisting before return.
  * Mutates `room.doc`/`room.version` on success; leaves them untouched on reject.
  *
@@ -58,6 +79,8 @@ export function applyOp(db, room, { type, payload }) {
   let effPayload = payload;
   let next;
   try {
+    const refused = checkCommand(room.doc, type, payload);
+    if (refused) return { ok: false, reason: refused };
     if (type === "EDIT_STORY") {
       const cur = room.doc.stories[payload?.id];
       effPayload = cur ? { ...cur, ...payload } : payload; // merge delta onto latest

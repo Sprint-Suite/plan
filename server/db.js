@@ -5,11 +5,10 @@
  * per-mutation transactional commit. One validated plan document per room as a
  * single row (PROPOSE §3) — plan already owns the validated serialisation
  * (exportPlan) and guard (validatePlan), so no normalised tables and no op-log.
- *
- * Throwaway spike code: kept thin on purpose.
  */
 
 import Database from "better-sqlite3";
+import { migratePlan } from "../public/js/plan-io.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -55,18 +54,22 @@ export function createRoom(db, { id, companyId, shareToken, mode, doc }) {
 }
 
 /**
- * Re-hydrate a room (and its document + version) from the row.
+ * Re-hydrate a room (and its document + version) from the row. The document is
+ * migrated to the current schema here; the upgraded form is persisted by the
+ * room's next commit. Throws if the stored document cannot be migrated.
  * @returns {{ id: string, companyId: string, shareToken: string, mode: string, doc: any, version: number } | null}
  */
 export function loadRoom(db, id) {
   const r = /** @type {any} */ (db.prepare("SELECT * FROM rooms WHERE id = ?").get(id));
   if (!r) return null;
+  const migrated = migratePlan(JSON.parse(r.plan_json));
+  if (!migrated.ok) throw new Error(`room ${id}: ${migrated.reason}`);
   return {
     id: r.id,
     companyId: r.company_id,
     shareToken: r.share_token,
     mode: r.mode,
-    doc: JSON.parse(r.plan_json),
+    doc: migrated.plan,
     version: r.version,
   };
 }
