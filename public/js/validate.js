@@ -27,6 +27,21 @@ export function parsePoints(input) {
   return isValidPoints(n) ? n : null;
 }
 
+/** The velocity rule shared by the settings input and the plan contract. */
+export const MAX_VELOCITY = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Coerce settings-strip input to a velocity: rounded, at least 1, or null when
+ * not a number or beyond MAX_VELOCITY.
+ * @param {unknown} input
+ * @returns {number | null}
+ */
+export function parseVelocity(input) {
+  if (typeof input === "string" && input.trim() === "") return null;
+  const n = Math.max(1, Math.round(Number(input)));
+  return Number.isFinite(n) && n <= MAX_VELOCITY ? n : null;
+}
+
 /**
  * @param {unknown} value
  * @returns {boolean}

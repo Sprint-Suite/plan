@@ -7,7 +7,7 @@
  * Expects a migrated plan; migratePlan owns the version verdict.
  */
 
-import { isValidPoints } from "./validate.js";
+import { isValidPoints, MAX_VELOCITY } from "./validate.js";
 import { daysInMonth } from "./date.js";
 import { PALETTE } from "./epic-palette.js";
 import { generateSprints } from "./plan-maths.js";
@@ -55,7 +55,7 @@ function checkMetaAndSettings({ meta, settings }) {
   if (!isISODate(settings.startDate)) return "invalid start date";
   if (!isIntIn(settings.durationMonths, 1, 3)) return "invalid plan duration";
   if (!isIntIn(settings.sprintWeeks, 1, 4)) return "invalid sprint length";
-  if (!isIntIn(settings.velocity, 1, Number.MAX_SAFE_INTEGER)) return "invalid velocity";
+  if (!isIntIn(settings.velocity, 1, MAX_VELOCITY)) return "invalid velocity";
   if (!isIntIn(settings.bufferPct, 0, 99)) return "invalid buffer";
   return null;
 }

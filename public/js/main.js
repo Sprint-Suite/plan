@@ -34,7 +34,7 @@ import { openEpicEditor } from "./epic-editor.js";
 import { setupDrag, isDragging } from "./drag.js";
 import { dismissBanner, clearDismissedBanners } from "./banner.js";
 import { openResumePrompt, openInvalidPrompt } from "./resume-prompt.js";
-import { singleLineTitle } from "./validate.js";
+import { singleLineTitle, parseVelocity } from "./validate.js";
 import { decideEntry, fetchSession } from "./auth-gate.js";
 import { launchUrl } from "./suite-urls.js";
 import { wireLogout } from "./logout.js";
@@ -363,8 +363,8 @@ on("ss-start", "change", (v) => v && dispatchSettings(setStartDate(v)));
 on("ss-duration", "change", (v) => dispatchSettings(setDurationMonths(Number(v))));
 on("ss-sprint-weeks", "change", (v) => dispatchSettings(setSprintWeeks(Number(v))));
 on("ss-velocity", "change", (v) => {
-  const n = Math.max(1, Math.round(Number(v)));
-  if (Number.isFinite(n)) dispatchSettings(setVelocity(n));
+  const n = parseVelocity(v);
+  if (n !== null) dispatchSettings(setVelocity(n));
 });
 on("ss-buffer", "change", (v) => {
   const n = Math.min(99, Math.max(0, Math.round(Number(v))));
