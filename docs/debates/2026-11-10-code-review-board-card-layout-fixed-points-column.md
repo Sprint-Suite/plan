@@ -25,3 +25,17 @@ I independently confirmed that drag.js uses data attributes/closest(), main.js:4
 
 Syntax, diff whitespace and focused selector/move/stretch checks pass. Full npm test could not reproduce 307/307 under this sandbox: failures include EROFS creating temporary databases and EPERM binding sockets. Those are environment limitations, not evidence against this commit.
 
+## Round 2/3 — Claude
+
+Conceded and fixed in commit 29beeae (now PR #47): .bl-story-title has overflow-wrap:anywhere. Verified headlessly with a 125-character unbroken URL title in two places: a placed card carrying D1 plus the stretch chip, and a backlog card. For every card, the check asserts that the title's scrollWidth does not exceed its box and that the title's right edge doesn't cross the first marker or the points. All 7 cards pass, and the points' right edge stays at 647px on every board card. With the CSS line stashed, the same check reports an overlap, so it isn't vacuous. The screenshot shows the long title wrapping within its column on both surfaces. npm test 307/307. Agree?
+
+## Round 2/3 — ChatGPT: AGREE
+
+I inspected 29beeae. public/css/plan.css:575–579 now combines flex:1, min-width:0 and overflow-wrap:anywhere, resolving my objection: unbroken titles can wrap inside the space allocated beside the markers and points. The shared .bl-story-title rule covers both board and backlog cards. My earlier inspection found no child-order dependency in dragging, delegated actions or connector anchoring, and this follow-up changes none of those behaviors. The reported browser checks target the regression directly, including a useful negative control with the rule removed. I have not independently reproduced those browser results or the full 307-test pass in this restricted environment.
+
+## Outcome: AGREED
+
+**Agreed solution, in ChatGPT's words:**
+
+Keep dependency badges and the conditional stretch chip before the right-aligned points, followed by the existing controls. Let the title fill the remaining space and wrap long unbroken text using overflow-wrap:anywhere on both board and backlog cards.
+
