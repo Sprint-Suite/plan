@@ -2,7 +2,7 @@
 // @ts-check
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideEntry, sessionFromResponse } from "../public/js/auth-gate.js";
+import { decideEntry, sessionFromResponse, startSuiteHeartbeat } from "../public/js/auth-gate.js";
 
 test("a room link always takes the room path, whatever the session", () => {
   for (const session of ["authed", "anon", "no-auth-system", "error"]) {
@@ -63,4 +63,28 @@ test("5xx => error (fail closed via decideEntry)", () => {
 test("defensive: 200 {authenticated:true} / {userId} still => authed", () => {
   assert.equal(sessionFromResponse({ status: 200, type: "basic", body: { authenticated: true } }), "authed");
   assert.equal(sessionFromResponse({ status: 200, type: "basic", body: { userId: "u1" } }), "authed");
+});
+
+/** A minimal document double that records appended scripts. */
+function fakeDoc() {
+  const appended = /** @type {any[]} */ ([]);
+  return {
+    appended,
+    createElement: (/** @type {string} */ tag) => ({ tag, src: "", defer: false }),
+    head: { append: (/** @type {any} */ el) => appended.push(el) },
+  };
+}
+
+test("a suite user gets the suite heartbeat script, which keeps their suite login alive", () => {
+  const doc = fakeDoc();
+  startSuiteHeartbeat({ hasSuiteSession: true, doc: /** @type {any} */ (doc) });
+  assert.equal(doc.appended.length, 1);
+  assert.equal(doc.appended[0].tag, "script");
+  assert.equal(doc.appended[0].src, "/auth-client/heartbeat.js");
+});
+
+test("a guest never loads the heartbeat (it would reload the page on every 401)", () => {
+  const doc = fakeDoc();
+  startSuiteHeartbeat({ hasSuiteSession: false, doc: /** @type {any} */ (doc) });
+  assert.equal(doc.appended.length, 0);
 });

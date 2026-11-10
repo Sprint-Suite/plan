@@ -20,6 +20,13 @@ test("token bucket allows a burst, refuses beyond it, and refills at the rate", 
   assert.equal(bucket.take(), false);
 });
 
+test("a clock stepping backwards never drains the token bucket", () => {
+  const c = clock();
+  const bucket = createTokenBucket({ rate: 10, burst: 3, now: c.now });
+  c.advance(-5000);
+  assert.deepEqual([bucket.take(), bucket.take(), bucket.take()], [true, true, true]);
+});
+
 test("window limiter caps each key independently over a rolling window", () => {
   const c = clock();
   const limiter = createWindowLimiter({ max: 2, windowMs: 1000, now: c.now });

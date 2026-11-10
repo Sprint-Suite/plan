@@ -103,7 +103,7 @@ function mountCreateRoom(app, { db, provider, limits, now }) {
  *   now?: () => number,
  * }} opts
  */
-export async function startSpikeServer({ db, port = 0, serveStatic = false, seedRoom = null, auth = null, host = "127.0.0.1", limits: overrides = {}, now = Date.now }) {
+export async function startSpikeServer({ db, port = 0, serveStatic = false, seedRoom = null, auth = null, host = "127.0.0.1", limits: overrides = {}, now = () => performance.now() }) {
   const provider = auth ?? (await createAuthProvider(process.env));
   const limits = { ...LIMITS, ...overrides };
   if (seedRoom && !loadRoom(db, seedRoom.id)) {
@@ -124,6 +124,8 @@ export async function startSpikeServer({ db, port = 0, serveStatic = false, seed
   const hub = createRoomHub({ db, limits });
   const ctx = { db, provider, limits, now, hub, wss };
   attachUpgrades(httpServer, ctx);
+  const keepalive = setInterval(() => hub.sweepLiveness(), limits.pingIntervalMs);
+  keepalive.unref();
 
   return new Promise((resolve) => {
     httpServer.listen(port, host, () => {
@@ -132,7 +134,7 @@ export async function startSpikeServer({ db, port = 0, serveStatic = false, seed
       resolve({
         url: `ws://${reachHost}:${addr.port}`,
         httpUrl: `http://${reachHost}:${addr.port}`,
-        close: () => { wss.close(); httpServer.close(); httpServer.closeAllConnections(); },
+        close: () => { clearInterval(keepalive); wss.close(); httpServer.close(); httpServer.closeAllConnections(); },
         cacheSize: hub.cacheSize,
         socketCount: hub.socketCount,
       });
@@ -229,6 +231,7 @@ function onConnection(/** @type {any} */ ctx, /** @type {any} */ ws, /** @type {
   broadcastPresence(hub, roomId);
   ws.on("error", (/** @type {Error} */ e) => console.error("ws socket error:", e.message));
   ws.on("ping", (/** @type {Buffer} */ data) => hub.pong(ws, data));
+  ws.on("pong", () => hub.markAlive(ws));
   ws.on("message", (/** @type {any} */ data) => {
     try {
       handleMessage(ctx, ws, room, data);
