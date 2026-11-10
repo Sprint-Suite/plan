@@ -56,13 +56,12 @@ export function applyOp(db, room, { type, payload }) {
   }
 
   let effPayload = payload;
-  if (type === "EDIT_STORY") {
-    const cur = room.doc.stories[payload?.id];
-    effPayload = cur ? { ...cur, ...payload } : payload; // merge delta onto latest
-  }
-
   let next;
   try {
+    if (type === "EDIT_STORY") {
+      const cur = room.doc.stories[payload?.id];
+      effPayload = cur ? { ...cur, ...payload } : payload; // merge delta onto latest
+    }
     next = reduce(room.doc, { type, payload: effPayload });
     const v = validatePlan(next);
     if (!v.ok) return { ok: false, reason: v.reason };

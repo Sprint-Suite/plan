@@ -18,6 +18,7 @@ function freshRoom() {
 
 const MALFORMED = [
   { name: "non-string type with a non-callable toString", op: { type: { toString: null }, payload: {} } },
+  { name: "EDIT_STORY whose id cannot be stringified", op: { type: "EDIT_STORY", payload: { id: { toString: null } } } },
   { name: "ADD_STORY whose epicId cannot be stringified", op: { type: "ADD_STORY", payload: { id: "s", title: "t", points: 1, epicId: { toString: null } } } },
 ];
 

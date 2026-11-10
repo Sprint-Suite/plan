@@ -164,6 +164,7 @@ export async function startSpikeServer({ db, port = 0, serveStatic = false, seed
   };
 
   httpServer.on("upgrade", (req, socket, head) => {
+    socket.on("error", (e) => console.error("upgrade socket error:", e.message));
     handleUpgrade(req, socket, head).catch((e) => {
       console.error("ws upgrade failed:", e);
       socket.destroy();
@@ -241,6 +242,8 @@ export async function startSpikeServer({ db, port = 0, serveStatic = false, seed
     }
 
     if (msg.type !== "op") return;
+    // Echoed in the ack/nack, so bound it before anything commits.
+    if (typeof msg.opId !== "string" || msg.opId.length > 64) return;
 
     const result = applyOp(db, room, { type: msg.op?.type, payload: msg.op?.payload });
     if (result.ok) {

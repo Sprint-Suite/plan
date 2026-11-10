@@ -6,6 +6,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { connect as tcpConnect } from "node:net";
 import { WebSocket } from "ws";
 
 /** @type {import("node:child_process").ChildProcess} */
@@ -74,7 +75,7 @@ test("a hostile frame from one client does not stop a valid op reaching others",
     if (m.type === "op") resolve(m);
   }));
   a.send("null");
-  a.send(JSON.stringify({ type: "op", opId: "1", op: { type: "SET_PLAN_TITLE", payload: { title: "ok" } } }));
+  a.send(JSON.stringify({ type: "op", opId: "1", op: { type: "SET_PLAN_TITLE", payload: "ok" } }));
   const m = /** @type {any} */ (await got);
   assert.equal(m.op.type, "SET_PLAN_TITLE");
   a.close(); b.close();
@@ -84,4 +85,32 @@ test("service survives an upgrade to a room whose stored document is corrupt", a
   const ws = new WebSocket(`ws://127.0.0.1:${port}/?room=corrupt&token=t&name=x`);
   await new Promise((resolve) => { ws.once("error", resolve); ws.once("close", resolve); });
   await assertAlive();
+});
+
+test("service survives a socket reset while the upgrade is awaiting auth", async () => {
+  const sock = tcpConnect(port, "127.0.0.1");
+  sock.on("error", () => {});
+  await new Promise((resolve) => sock.once("connect", resolve));
+  sock.write(
+    "GET /?room=r&token=t HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+  );
+  await wait(20);
+  sock.resetAndDestroy();
+  await assertAlive();
+});
+
+test("an op with a malformed opId is not committed", async () => {
+  let deep = "\"x\"";
+  for (let i = 0; i < 10000; i++) deep = `[${deep}]`;
+  const a = /** @type {WebSocket} */ (await connect());
+  a.send(`{"type":"op","opId":${deep},"op":{"type":"SET_PLAN_TITLE","payload":"deep-opid"}}`);
+  await wait(150);
+  const b = /** @type {WebSocket} */ (await new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/?room=r&token=t&name=y`);
+    ws.once("message", (d) => { ws.state0 = JSON.parse(d.toString()); resolve(ws); });
+    ws.once("error", reject);
+  }));
+  assert.notEqual(/** @type {any} */ (b).state0.doc.meta.title, "deep-opid");
+  a.close(); b.close();
 });
