@@ -41,7 +41,6 @@ export function storyCard(story, epic, badges = [], placed = false) {
     row.append(dot);
   }
   row.append(el("span", "bl-story-title", story.title));
-  row.append(el("span", "bl-story-pts mono", String(story.points)));
   // Shared D badges. The violation flag is carried per badge (Brief 7); Brief 8
   // renders it as the board-side red treatment. A badge (and the card border) go
   // red only when isViolation is true, which by construction needs BOTH endpoints
@@ -51,18 +50,21 @@ export function storyCard(story, epic, badges = [], placed = false) {
     row.append(el("span", "dep-badge mono" + (badge.violation ? " dep-badge--violation" : ""), badge.label));
   }
   if (badges.some((b) => b.violation)) row.classList.add("bl-story--dep-violation");
+  // Variable markers (D badges, stretch chip) sit before the points so the points
+  // and the action buttons hold a fixed column on every card.
+  if (placed && story.stretch) row.append(el("span", "bl-story-stretch-chip mono", "stretch"));
+  row.append(el("span", "bl-story-pts mono", String(story.points)));
   // phase2-build3 #9: one-click return-to-backlog, on PLACED (board) cards only.
   // The explicit `placed` flag (not epic-presence, which is unreliable — a No-epic
   // placed card has epic=null too) keeps backlog renders unchanged. Carries its
   // own data-act so the board listener routes it to MOVE_STORY, not edit-story;
   // drag.js excludes it as a drag handle so grabbing it never starts a drag.
   if (placed) {
-    // phase2-build6: stretch is a PLACED-only concept. A muted chip reads only
-    // when the flag is on; the toggle is always available on a placed card and
+    // phase2-build6: stretch is a PLACED-only concept. The muted chip (above)
+    // reads only when the flag is on; the toggle is always available on a placed card and
     // routes to SET_STORY_STRETCH via the board listener (a stretch story moved
     // back to the backlog keeps the flag in data but renders neither here). Like
     // the return control, drag.js excludes the toggle so tapping it never drags.
-    if (story.stretch) row.append(el("span", "bl-story-stretch-chip mono", "stretch"));
     const toggleLabel = story.stretch ? "Unmark stretch goal" : "Mark as stretch goal";
     const toggle = el("button", "bl-story-stretch-toggle" + (story.stretch ? " is-on" : ""), "✦");
     toggle.setAttribute("type", "button");
