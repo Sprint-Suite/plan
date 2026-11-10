@@ -40,3 +40,14 @@ test("applyOp rejects when the commit fails, leaving the room unchanged", () => 
   assert.equal(room.version, 0);
   assert.equal(room.doc, before);
 });
+
+test("applyOp rejects an op whose payload cannot be serialised for broadcast, before committing", () => {
+  const { db, room } = freshRoom();
+  /** @type {any} */
+  let extra = "x";
+  for (let i = 0; i < 10000; i++) extra = [extra];
+  const result = applyOp(db, room, { type: "ADD_EPIC", payload: { id: "e", title: "invisible", extra } });
+  assert.equal(result.ok, false);
+  assert.equal(room.version, 0);
+  assert.equal(/** @type {any} */ (loadRoom(db, "r")).version, 0);
+});

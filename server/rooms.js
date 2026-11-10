@@ -65,6 +65,9 @@ export function applyOp(db, room, { type, payload }) {
     next = reduce(room.doc, { type, payload: effPayload });
     const v = validatePlan(next);
     if (!v.ok) return { ok: false, reason: v.reason };
+    // The caller broadcasts this op after commit; prove it serialises first, so
+    // a commit can never be followed by a failed (invisible) broadcast.
+    JSON.stringify(effPayload);
   } catch {
     return { ok: false, reason: "invalid op" };
   }

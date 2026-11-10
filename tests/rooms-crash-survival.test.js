@@ -50,11 +50,11 @@ const HOSTILE_FRAMES = [
   "42",
   '"str"',
   "[]",
-  '{"type":"op"}',
-  '{"type":"op","op":null}',
-  '{"type":"op","op":{"type":{"toString":null}}}',
-  '{"type":"op","op":{"type":"EDIT_STORY","payload":null}}',
-  '{"type":"op","op":{"type":"ADD_STORY","payload":{"epicId":{"toString":null}}}}',
+  '{"type":"op","opId":"h"}',
+  '{"type":"op","opId":"h","op":null}',
+  '{"type":"op","opId":"h","op":{"type":{"toString":null}}}',
+  '{"type":"op","opId":"h","op":{"type":"EDIT_STORY","payload":null}}',
+  '{"type":"op","opId":"h","op":{"type":"ADD_STORY","payload":{"epicId":{"toString":null}}}}',
   '{"type":"cursor","x":null}',
 ];
 
