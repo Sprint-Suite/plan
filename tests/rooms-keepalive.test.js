@@ -4,7 +4,7 @@
  * the service never see a silent tunnel), and a connection that stops
  * answering is cleaned up.
  */
-import { test } from "node:test";
+import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { WebSocket } from "ws";
 
@@ -14,16 +14,22 @@ import { createInitialState } from "../public/js/store.js";
 
 const wait = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 
+// Closed after each test, pass or fail, so a failure cannot hang the run.
+const opened = /** @type {Array<() => void>} */ ([]);
+afterEach(() => { for (const close of opened.splice(0)) close(); });
+
 async function boot() {
   const db = openDb(":memory:");
   createRoom(db, { id: "r", companyId: "acme", shareToken: "t", mode: "open-link", doc: createInitialState("2026-01-05") });
   const server = await startSpikeServer({ db, limits: { pingIntervalMs: 50 } });
+  opened.push(() => { server.close(); if (db.open) db.close(); });
   return { db, server };
 }
 
 function join(/** @type {any} */ server, /** @type {any} */ opts = {}) {
   return new Promise((resolve) => {
     const ws = new WebSocket(`${server.url}/?room=r&token=t&name=x`, opts);
+    opened.unshift(() => ws.terminate());
     const client = { ws, pings: 0, closed: false };
     ws.on("ping", () => { client.pings++; });
     ws.on("close", () => { client.closed = true; });
@@ -38,7 +44,6 @@ test("an idle connection that answers pings stays open", async () => {
   assert.ok(c.pings >= 3, `expected regular pings, got ${c.pings}`);
   assert.equal(c.closed, false);
   assert.equal(server.socketCount("r"), 1);
-  c.ws.terminate(); server.close(); db.close();
 });
 
 test("a connection that stops answering pings is cut off", async () => {
@@ -46,5 +51,4 @@ test("a connection that stops answering pings is cut off", async () => {
   const c = /** @type {any} */ (await join(server, { autoPong: false }));
   await wait(400);
   assert.equal(server.socketCount("r"), 0);
-  c.ws.terminate(); server.close(); db.close();
 });
