@@ -25,10 +25,19 @@ import { reduce, createInitialState } from "./store.js";
 import { newId } from "./ids.js";
 
 /**
- * @param {{ transport: Transport, name?: string, onNack?: (reason: string) => void, onPresence?: (participants: any[]) => void, onCursor?: (msg: { id: string, x?: number, y?: number, gone?: boolean }) => void }} opts
+ * After the connection drops the store is inert: nothing more is sent, and
+ * onDisconnect fires once so the view can block the now-stale board.
+ * @param {{ transport: Transport, name?: string, onNack?: (reason: string) => void, onPresence?: (participants: any[]) => void, onCursor?: (msg: { id: string, x?: number, y?: number, gone?: boolean }) => void, onDisconnect?: () => void }} opts
  * @returns {{ getState: () => any, dispatch: (action: { type: string, payload?: any }) => void, sendCursor: (x: number, y: number) => void, clearCursor: () => void, subscribe: (fn: (s: any) => void) => () => void, close: () => void }}
  */
-export function createRoomStore({ transport, name = "guest", onNack = () => {}, onPresence = () => {}, onCursor = () => {} }) {
+export function createRoomStore({ transport, name = "guest", onNack = () => {}, onPresence = () => {}, onCursor = () => {}, onDisconnect = () => {} }) {
+  let closed = false;
+  const send = (/** @type {any} */ msg) => { if (!closed) transport.send(msg); };
+  transport.onClose(() => {
+    if (closed) return;
+    closed = true;
+    onDisconnect();
+  });
   // Placeholder until the server's authoritative 'state' frame arrives.
   let state = createInitialState("2026-01-01");
   let version = 0;
@@ -78,7 +87,7 @@ export function createRoomStore({ transport, name = "guest", onNack = () => {}, 
         payload = delta;
       }
       // Pessimistic: emit the op, do NOT reduce locally (R1).
-      transport.send({ type: "op", opId: newId("op"), op: { type: action.type, payload }, baseVersion: version });
+      send({ type: "op", opId: newId("op"), op: { type: action.type, payload }, baseVersion: version });
     },
     /**
      * Send THIS client's pointer position as normalised board fractions (phase2-
@@ -88,11 +97,11 @@ export function createRoomStore({ transport, name = "guest", onNack = () => {}, 
      * @param {number} x @param {number} y
      */
     sendCursor(x, y) {
-      transport.send({ type: "cursor", x, y });
+      send({ type: "cursor", x, y });
     },
     /** Tell the room this client's cursor has left the board (phase2-build5). */
     clearCursor() {
-      transport.send({ type: "cursor", gone: true });
+      send({ type: "cursor", gone: true });
     },
     subscribe(fn) {
       subscribers.add(fn);

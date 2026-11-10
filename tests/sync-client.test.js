@@ -21,9 +21,10 @@ function fakeTransport() {
     send(msg) { this.sent.push(msg); },
     onMessage(cb) { onMessage = cb; },
     onOpen() {},
-    onClose() {},
+    onClose(cb) { this.closeCb = cb; },
     close() {},
     receive(msg) { onMessage(msg); },
+    drop() { this.closeCb?.(); },
   };
 }
 
@@ -145,4 +146,17 @@ test("a 'presence' frame invokes onPresence and does not touch plan state/versio
   assert.equal(store.getState(), before, "plan state unchanged by presence");
   store.dispatch(addStory("S2"));
   assert.equal(t.sent.at(-1).baseVersion, 5, "version unchanged by presence");
+});
+
+test("a dropped connection fires onDisconnect once and silences every send", () => {
+  const t = fakeTransport();
+  let disconnects = 0;
+  const store = createRoomStore({ transport: t, onDisconnect: () => { disconnects++; } });
+  t.receive(stateFrame(1));
+  t.drop();
+  store.dispatch(addStory("S2"));
+  store.sendCursor(0.5, 0.5);
+  store.clearCursor();
+  assert.equal(disconnects, 1);
+  assert.deepEqual(t.sent, []);
 });

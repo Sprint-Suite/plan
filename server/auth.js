@@ -10,7 +10,7 @@
  *     so module load + CI never need the package or a running hub — the package
  *     is a deploy-time dependency (see docs/phase2-mp2-hub-registration.md).
  *
- * Interface: { mode, verifySession(headers), requireAuth, companyOf(req), mountRoutes(app) }.
+ * Interface: { mode, verifySession(headers), requireAuth, companyOf(req), userOf(req), mountRoutes(app) }.
  * verifySession is normalised to { userId, entitled, company } where `company` is
  * the company ID STRING, so decideUpgrade's `session.company === room.companyId`
  * check is identical for both providers (the hub returns company as {id,name};
@@ -21,7 +21,7 @@ import { verifySession as stubVerify } from "./auth-seam.js";
 
 /**
  * @param {Record<string, string | undefined>} env
- * @returns {Promise<{ mode: string, verifySession: (h: any) => any, requireAuth: Function, companyOf: (req: any) => string | null, mountRoutes: (app: any) => void }>}
+ * @returns {Promise<{ mode: string, verifySession: (h: any) => any, requireAuth: Function, companyOf: (req: any) => string | null, userOf: (req: any) => string | null, mountRoutes: (app: any) => void }>}
  */
 export async function createAuthProvider(env = {}) {
   return env.HUB_BASE_URL ? createRealProvider(env) : createStubProvider();
@@ -38,6 +38,7 @@ function createStubProvider() {
       next();
     },
     companyOf: (/** @type {any} */ req) => req.user?.company ?? null,
+    userOf: (/** @type {any} */ req) => req.user?.userId ?? null,
     mountRoutes: () => {},
   };
 }
@@ -69,6 +70,7 @@ async function createRealProvider(env) {
     },
     requireAuth: client.requireAuth,
     companyOf: (/** @type {any} */ req) => req.user?.company?.id ?? req.user?.company ?? null,
+    userOf: (/** @type {any} */ req) => req.user?.id ?? null,
     mountRoutes: (/** @type {any} */ app) => {
       app.use("/auth-client", client.staticAssets);
       app.get("/auth/launch", client.handleLaunch);

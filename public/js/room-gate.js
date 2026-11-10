@@ -54,3 +54,22 @@ export function promptForName(heading = "Join the room") {
     input.focus();
   });
 }
+
+/**
+ * Block the board after the room connection drops: the store has stopped
+ * sending, so the board on screen is stale. Non-dismissable; Reload rejoins
+ * with a fresh authoritative state.
+ */
+export function showConnectionLost() {
+  const content = el("div", "modal-body");
+  content.append(el("p", "field-hint", "The connection to this room was lost, so the board may be out of date. Reload to rejoin."));
+  const footer = el("div", "modal-footer");
+  const right = el("div", "modal-footer-right");
+  const reload = /** @type {HTMLButtonElement} */ (el("button", "btn btn-pri", "Reload"));
+  reload.setAttribute("type", "button");
+  right.append(reload);
+  footer.append(right);
+  openModal({ heading: "Connection lost", content, footer, dismissable: false });
+  reload.addEventListener("click", () => location.reload());
+  reload.focus();
+}
