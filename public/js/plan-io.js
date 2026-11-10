@@ -1,98 +1,21 @@
 // @ts-check
 /**
- * Plan-level persistence-boundary operations (Brief 5, P0 #7). These are the
- * single safety spine every load path passes through: a foreign file, a dangling
- * id, or an unknown schema version fails HERE, at the boundary, never in the
- * renderer. All four functions are PURE and DOM-free; the Blob/file glue in
- * main.js is thin wiring over this tested core.
+ * Plan-level persistence-boundary operations: envelope extraction, schema
+ * migration and export, plus the document contract (plan-contract.js)
+ * re-exported as validatePlan. Every load path passes through these, so a
+ * foreign file or a malformed plan fails here, never in the renderer. Pure and
+ * DOM-free; the Blob/file glue in main.js is thin wiring over this core.
  *
  * Failable functions return a discriminated result: { ok: true, plan } or
  * { ok: false, reason } with a human-readable reason naming the first failure.
  */
 
-import { isValidPoints } from "./validate.js";
+import { SCHEMA_VERSION as CURRENT_SCHEMA } from "./plan-contract.js";
 
-/** The schema version this build understands. Brief 7: v2 adds the deps field.
- * phase2-build6: v3 adds the optional story `stretch` flag. */
-const CURRENT_SCHEMA = 3;
+export { validatePlan } from "./plan-contract.js";
 
 /** @param {any} v @returns {boolean} a plain (non-array) object */
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
-
-/**
- * Validate a plan's structure and conservation invariants. Assumes a migrated
- * plan (migratePlan owns the version verdict). Checks at minimum: every
- * top-level key is present and the right kind; every backlog/placed id exists in
- * stories; no id appears in more than one array (conservation, the invariant
- * MOVE_STORY protects, now enforced at the load boundary); every story.epicId is
- * null or an existing epic; every story's points pass the validate.js rule.
- * @param {any} plan
- * @returns {{ ok: true, plan: any } | { ok: false, reason: string }}
- */
-export function validatePlan(plan) {
-  if (!isObject(plan)) return { ok: false, reason: "plan is not an object" };
-
-  // Top-level keys present and the right kind (names the first failure).
-  for (const key of ["meta", "settings", "epics", "stories"]) {
-    if (!isObject(plan[key])) return { ok: false, reason: `missing or invalid key: ${key}` };
-  }
-  for (const key of ["sprints", "backlog"]) {
-    if (!Array.isArray(plan[key])) return { ok: false, reason: `missing or invalid key: ${key}` };
-  }
-
-  // Conservation: every placed/backlog id exists in stories, and no id appears
-  // in more than one array (the invariant MOVE_STORY protects, enforced here at
-  // the load boundary).
-  const seen = new Set();
-  const arrays = [plan.backlog, ...plan.sprints.map((/** @type {any} */ s) => s.placedStoryIds)];
-  for (const ids of arrays) {
-    if (!Array.isArray(ids)) return { ok: false, reason: "a sprint has invalid placedStoryIds" };
-    for (const id of ids) {
-      if (!(id in plan.stories)) return { ok: false, reason: `id "${id}" is not a known story` };
-      if (seen.has(id)) return { ok: false, reason: `id "${id}" appears in more than one place` };
-      seen.add(id);
-    }
-  }
-
-  // Per-story: epicId is null or an existing epic; points pass the validate.js rule.
-  for (const id of Object.keys(plan.stories)) {
-    const s = plan.stories[id];
-    if (s.epicId !== null && !(s.epicId in plan.epics)) {
-      return { ok: false, reason: `story "${id}" references unknown epic "${s.epicId}"` };
-    }
-    if (!isValidPoints(s.points)) {
-      return { ok: false, reason: `story "${id}" has invalid points: ${s.points}` };
-    }
-  }
-
-  // Dependencies (Brief 7): an array of directed pairs, each linking two distinct
-  // existing stories, no duplicate pair. A dangling pair id is the one
-  // unforgivable load-boundary failure, so it is rejected here.
-  if (!Array.isArray(plan.deps)) return { ok: false, reason: `missing or invalid key: deps` };
-  const pairSeen = new Set();
-  for (const d of plan.deps) {
-    // R8 (Brief 9): guard the element shape before reading its fields, so a
-    // hand-edited `deps: [null]` fails cleanly here like every other boundary
-    // failure instead of throwing on `d.blockerId`.
-    if (!isObject(d)) return { ok: false, reason: "a dependency element is not an object" };
-    if (d.blockerId === d.blockedId) {
-      return { ok: false, reason: `dependency "${d.id}" links a story to itself` };
-    }
-    if (!(d.blockerId in plan.stories)) {
-      return { ok: false, reason: `dependency "${d.id}" references unknown story "${d.blockerId}"` };
-    }
-    if (!(d.blockedId in plan.stories)) {
-      return { ok: false, reason: `dependency "${d.id}" references unknown story "${d.blockedId}"` };
-    }
-    const key = `${d.blockerId}>${d.blockedId}`;
-    if (pairSeen.has(key)) {
-      return { ok: false, reason: `duplicate dependency between "${d.blockerId}" and "${d.blockedId}"` };
-    }
-    pairSeen.add(key);
-  }
-
-  return { ok: true, plan };
-}
 
 /**
  * Version-dispatch migration seam (Brief 5 R4): walk a plan up one version at a
@@ -104,7 +27,7 @@ export function validatePlan(plan) {
  */
 export function migratePlan(plan) {
   const v = plan && plan.meta ? plan.meta.schemaVersion : undefined;
-  if (!Number.isInteger(v)) return { ok: false, reason: "missing or invalid schema version" };
+  if (!Number.isInteger(v) || v < 1) return { ok: false, reason: "missing or invalid schema version" };
   if (v > CURRENT_SCHEMA) return { ok: false, reason: "saved by a newer version of sprintplan" };
   let migrated = plan;
   for (let from = v; from < CURRENT_SCHEMA; from++) migrated = MIGRATORS[from](migrated);
