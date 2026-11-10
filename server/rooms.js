@@ -51,8 +51,8 @@ const ALLOWED = new Set([
  * @returns {OpResult}
  */
 export function applyOp(db, room, { type, payload }) {
-  if (!ALLOWED.has(type)) {
-    return { ok: false, reason: `op type not allowed: ${type}` };
+  if (typeof type !== "string" || !ALLOWED.has(type)) {
+    return { ok: false, reason: `op type not allowed: ${typeof type === "string" ? type : typeof type}` };
   }
 
   let effPayload = payload;
@@ -64,15 +64,19 @@ export function applyOp(db, room, { type, payload }) {
   let next;
   try {
     next = reduce(room.doc, { type, payload: effPayload });
-  } catch (e) {
-    return { ok: false, reason: `reduce failed: ${/** @type {Error} */ (e).message}` };
+    const v = validatePlan(next);
+    if (!v.ok) return { ok: false, reason: v.reason };
+  } catch {
+    return { ok: false, reason: "invalid op" };
   }
 
-  const v = validatePlan(next);
-  if (!v.ok) return { ok: false, reason: v.reason };
-
   const newVersion = room.version + 1;
-  commitRoom(db, room.id, next, newVersion); // durable BEFORE ack/broadcast
+  try {
+    commitRoom(db, room.id, next, newVersion); // durable BEFORE ack/broadcast
+  } catch (e) {
+    console.error(`commit failed for room ${room.id}:`, e);
+    return { ok: false, reason: "could not save the change" };
+  }
   room.doc = next;
   room.version = newVersion;
   return { ok: true, version: newVersion, op: { type, payload: effPayload } };
