@@ -75,3 +75,18 @@ export async function fetchSession() {
   }
   return sessionFromResponse({ status: res.status, type: res.type, body });
 }
+
+/**
+ * Keep a suite user's Sprint Suite login alive while plan is open: the suite's
+ * heartbeat script checks in every minute (the suite ends an idle login after
+ * 30 minutes). Suite users only — the script reloads the page on a 401, which
+ * a guest (no plan login) would get every time.
+ * @param {{ hasSuiteSession: boolean, doc?: Document }} opts
+ */
+export function startSuiteHeartbeat({ hasSuiteSession, doc = document }) {
+  if (!hasSuiteSession) return;
+  const script = doc.createElement("script");
+  script.src = "/auth-client/heartbeat.js";
+  script.defer = true;
+  doc.head.append(script);
+}

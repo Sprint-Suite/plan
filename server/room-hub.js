@@ -93,6 +93,26 @@ export function createRoomHub({ db, limits }) {
       evictIfEmpty(id);
     },
 
+    /**
+     * One keepalive round: cut every socket that has not answered the last
+     * ping, then ping the rest. Pongs mark a socket alive (markAlive).
+     */
+    sweepLiveness() {
+      for (const set of sockets.values()) {
+        for (const ws of set) {
+          const w = /** @type {any} */ (ws);
+          if (w.alive === false) {
+            ws.terminate();
+            continue;
+          }
+          w.alive = false;
+          if (writable(ws)) ws.ping();
+        }
+      }
+    },
+
+    markAlive: (/** @type {WebSocket} */ ws) => { /** @type {any} */ (ws).alive = true; },
+
     /** The admitted sockets in a room (for presence and colour assignment). */
     members: (/** @type {string} */ id) => [...(sockets.get(id) ?? [])],
 

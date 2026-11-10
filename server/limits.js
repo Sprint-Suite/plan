@@ -21,19 +21,24 @@ export const LIMITS = Object.freeze({
   maxRoomSockets: 50, maxTotalSockets: 500, maxPendingUpgrades: 100,
   roomsPerUserPerHour: 20,
   maxNameLength: 40,
+  // Server pings keep idle room tunnels open through proxies; a socket that
+  // misses a whole interval without a pong is cut.
+  pingIntervalMs: 30_000,
 });
 
 /**
+ * Defaults to a monotonic clock, and never refills by negative time, so a
+ * wall-clock step backwards cannot drain the bucket.
  * @param {{ rate: number, burst: number, now?: () => number }} opts  rate per second
  * @returns {{ take: () => boolean }}
  */
-export function createTokenBucket({ rate, burst, now = Date.now }) {
+export function createTokenBucket({ rate, burst, now = () => performance.now() }) {
   let tokens = burst;
   let last = now();
   return {
     take() {
       const t = now();
-      tokens = Math.min(burst, tokens + ((t - last) / 1000) * rate);
+      tokens = Math.min(burst, tokens + (Math.max(0, t - last) / 1000) * rate);
       last = t;
       if (tokens < 1) return false;
       tokens -= 1;

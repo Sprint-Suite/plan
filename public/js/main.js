@@ -35,7 +35,7 @@ import { setupDrag, isDragging } from "./drag.js";
 import { dismissBanner, clearDismissedBanners } from "./banner.js";
 import { openResumePrompt, openInvalidPrompt } from "./resume-prompt.js";
 import { singleLineTitle, parseVelocity, isISODate } from "./validate.js";
-import { decideEntry, fetchSession } from "./auth-gate.js";
+import { decideEntry, fetchSession, startSuiteHeartbeat } from "./auth-gate.js";
 import { launchUrl } from "./suite-urls.js";
 import { wireLogout } from "./logout.js";
 
@@ -143,6 +143,7 @@ if (entry.mode === "redirect") {
 }
 document.getElementById("boot-overlay")?.remove(); // staying — reveal the app
 const HAS_SUITE_SESSION = entry.hasSuiteSession;
+startSuiteHeartbeat({ hasSuiteSession: HAS_SUITE_SESSION });
 
 /** Translate a server nack reason into a user-facing toast line. */
 function roomNackMessage(/** @type {string} */ reason) {

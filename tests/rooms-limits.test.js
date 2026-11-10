@@ -3,7 +3,7 @@
  * M2 resource limits on the rooms service, each exercised against a real server
  * instance with small overridden limits and an injectable clock.
  */
-import { test } from "node:test";
+import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { WebSocket } from "ws";
 
@@ -28,6 +28,15 @@ function clock() {
   return { now: () => t, advance: (/** @type {number} */ ms) => { t += ms; } };
 }
 
+// Everything a test opens is closed after it, pass or fail, so a failing test
+// can never keep the file's event loop alive.
+const opened = { servers: /** @type {any[]} */ ([]), sockets: /** @type {any[]} */ ([]), dbs: /** @type {any[]} */ ([]) };
+afterEach(() => {
+  for (const ws of opened.sockets.splice(0)) ws.terminate();
+  for (const server of opened.servers.splice(0)) server.close();
+  for (const db of opened.dbs.splice(0)) if (db.open) db.close();
+});
+
 /** @param {any} [opts] */
 async function boot(opts = {}) {
   const db = opts.db ?? openDb(":memory:");
@@ -37,6 +46,8 @@ async function boot(opts = {}) {
     createRoom(db, { id: "co", companyId: "acme", shareToken: "t", mode: "company-only", doc: createInitialState("2026-01-05") });
   }
   const server = await startSpikeServer({ db, ...opts, db: opts.dbHandle ?? db });
+  opened.servers.push(server);
+  opened.dbs.push(db);
   return { db, server };
 }
 
@@ -48,6 +59,7 @@ async function boot(opts = {}) {
 function join(/** @type {any} */ server, query = "room=r&token=t&name=x", headers = {}) {
   return new Promise((resolve) => {
     const ws = new WebSocket(`${server.url}/?${query}`, { headers });
+    opened.sockets.push(ws);
     const frames = /** @type {any[]} */ ([]);
     const client = { ws, frames, closeCode: /** @type {number | null} */ (null) };
     ws.on("message", (d) => {
@@ -273,14 +285,16 @@ test("the last leave evicts the room, and a rejoin reloads it with its changes",
 // --- backpressure -------------------------------------------------------------
 
 test("a broadcast recipient that stops reading is cut off", async () => {
-  const { db, server } = await boot({ limits: { maxBufferedBytes: 256 * 1024, opRate: 10_000, opBurst: 10_000 } });
+  const { db, server } = await boot({ limits: { maxBufferedBytes: 1024 * 1024, opRate: 10_000, opBurst: 10_000 } });
   const a = await join(server);
   const b = await join(server);
   /** @type {any} */ (b.ws)._socket.pause();
-  // Paced, so the reading sender keeps up while the paused recipient falls behind.
+  // Flow-controlled: the reading sender waits for its own acks after each batch
+  // of 5 (300 KB), so its backlog stays under the limit however loaded the
+  // machine is, while the paused recipient falls ever further behind.
   for (let i = 0; i < 1000; i++) {
     a.ws.send(titleOp(String(i), "x".repeat(60 * 1024)));
-    if (i % 5 === 4) await wait(5);
+    if (i % 5 === 4) await until(() => of(a, "op").length === i + 1, 10_000);
   }
   await until(() => b.closeCode !== null || server.socketCount("r") === 1, 10_000);
   await until(() => of(a, "op").length === 1000, 10_000);
