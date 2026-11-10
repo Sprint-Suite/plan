@@ -4,6 +4,8 @@
  * reducer trusts validated payloads (same boundary as Brief 1).
  */
 
+import { daysInMonth } from "./date.js";
+
 /**
  * The single points rule: positive integer (>= 1). The one authority both the
  * editor coercer (parsePoints) and the load-boundary validator (validatePlan)
@@ -25,6 +27,13 @@ export function parsePoints(input) {
   if (typeof input === "string" && input.trim() === "") return null;
   const n = Number(input);
   return isValidPoints(n) ? n : null;
+}
+
+/** @param {unknown} v @returns {boolean} a real calendar date as YYYY-MM-DD */
+export function isISODate(v) {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const [y, m, d] = v.split("-").map(Number);
+  return m >= 1 && m <= 12 && d >= 1 && d <= daysInMonth(y, m);
 }
 
 /** The velocity rule shared by the settings input and the plan contract. */

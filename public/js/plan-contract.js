@@ -7,8 +7,7 @@
  * Expects a migrated plan; migratePlan owns the version verdict.
  */
 
-import { isValidPoints, MAX_VELOCITY } from "./validate.js";
-import { daysInMonth } from "./date.js";
+import { isValidPoints, isISODate, MAX_VELOCITY } from "./validate.js";
 import { PALETTE } from "./epic-palette.js";
 import { generateSprints } from "./plan-maths.js";
 
@@ -25,13 +24,6 @@ const isIntIn = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
 const has = (obj, key) => typeof key === "string" && Object.hasOwn(obj, key);
 /** A printable form of a possibly non-string id, for reasons. @param {any} v */
 const label = (v) => (typeof v === "string" ? v : `(${typeof v})`);
-
-/** @param {any} v @returns {boolean} a real calendar date as YYYY-MM-DD */
-export function isISODate(v) {
-  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
-  const [y, m, d] = v.split("-").map(Number);
-  return m >= 1 && m <= 12 && d >= 1 && d <= daysInMonth(y, m);
-}
 
 /** @param {any} plan @returns {string | null} */
 function checkShape(plan) {
