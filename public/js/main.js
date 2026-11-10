@@ -9,7 +9,7 @@ import { createStore, createInitialState } from "./store.js";
 import { createRoomStore, wsTransport } from "./sync-client.js";
 import { wireCollaborate, openInviteModal } from "./collaborate.js";
 import { resolveJoinName } from "./room-join.js";
-import { promptForName } from "./room-gate.js";
+import { promptForName, showConnectionLost } from "./room-gate.js";
 import { toBoardFraction, fromBoardFraction, reconcileCursors } from "./cursors.js";
 import {
   setStartDate,
@@ -178,6 +178,7 @@ const store = IN_ROOM
       onNack: (reason) => flash(roomNackMessage(reason)),
       onPresence: (list) => renderPresence(list),
       onCursor: (msg) => handleCursor(/** @type {HTMLElement} */ (document.getElementById("board")), msg),
+      onDisconnect: showConnectionLost,
     })
   : createStore(freshPlan());
 

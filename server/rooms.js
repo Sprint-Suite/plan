@@ -16,6 +16,7 @@
 import { reduce } from "../public/js/store.js";
 import { validatePlan } from "../public/js/plan-io.js";
 import { commitRoom } from "./db.js";
+import { LIMITS } from "./limits.js";
 
 /**
  * The 11 wire ops. All serialise safely under arrival order + validatePlan; EDIT_STORY
@@ -69,9 +70,10 @@ function checkCommand(doc, type, p) {
  * @param {import("better-sqlite3").Database} db
  * @param {{ id: string, doc: any, version: number }} room
  * @param {{ type: string, payload: any }} op
+ * @param {{ maxDocBytes: number }} [limits]
  * @returns {OpResult}
  */
-export function applyOp(db, room, { type, payload }) {
+export function applyOp(db, room, { type, payload }, limits = LIMITS) {
   if (typeof type !== "string" || !ALLOWED.has(type)) {
     return { ok: false, reason: `op type not allowed: ${typeof type === "string" ? type : typeof type}` };
   }
@@ -91,6 +93,9 @@ export function applyOp(db, room, { type, payload }) {
     // The caller broadcasts this op after commit; prove it serialises first, so
     // a commit can never be followed by a failed (invisible) broadcast.
     JSON.stringify(effPayload);
+    if (Buffer.byteLength(JSON.stringify(next), "utf8") > limits.maxDocBytes) {
+      return { ok: false, reason: "the plan is too large" };
+    }
   } catch {
     return { ok: false, reason: "invalid op" };
   }

@@ -1,17 +1,11 @@
 // @ts-check
 /**
- * Phase 2 spike — the standalone ws service. A thin Node process (its own port;
- * plan's static host is 3004) that:
- *   - authenticates the ws UPGRADE via the auth seam (verifySession),
- *   - enforces the per-room BLEND policy at the boundary (open-link vs
- *     company-only), company-scoped, with no cross-company leak,
- *   - holds ONE authoritative in-memory document per room (loaded once, mutated
- *     in place by the op loop),
- *   - runs every op through applyOp (reduce -> validatePlan -> commit BEFORE
- *     broadcast), broadcasting the applied op + version to the room and nacking
- *     a reject to its sender only.
- *
- * Borrows poker's shapes only: ws upgrade, the company-scoped room, shareToken.
+ * The rooms service: an express app (auth routes, POST /rooms) plus a ws server.
+ *   - A ws upgrade is rate limited, authorized against the room's metadata and
+ *     blend policy (decideUpgrade), then admitted into a capacity slot.
+ *   - Each active room has ONE authoritative document (room-hub.js); every op
+ *     runs through applyOp (reduce -> validatePlan -> commit BEFORE broadcast).
+ *   - Limits (limits.js) bound frames, documents, rates and connections.
  */
 
 import { createServer } from "node:http";
@@ -20,10 +14,12 @@ import { dirname, join as pathJoin } from "node:path";
 import express from "express";
 import { WebSocketServer } from "ws";
 
-import { loadRoom, createRoom } from "./db.js";
+import { loadRoom, loadRoomMeta, createRoom } from "./db.js";
 import { makeSecurityHeaders } from "./middleware/securityHeaders.js";
 import { applyOp } from "./rooms.js";
 import { createAuthProvider } from "./auth.js";
+import { LIMITS, createTokenBucket, createWindowLimiter } from "./limits.js";
+import { createRoomHub } from "./room-hub.js";
 import { createInitialState } from "../public/js/store.js";
 import { validatePlan, migratePlan } from "../public/js/plan-io.js";
 import { newId } from "../public/js/ids.js";
@@ -52,13 +48,50 @@ export function decideUpgrade(room, session, token) {
   return { ok: true, identity };
 }
 
+
+/** Reject a raw upgrade socket with an HTTP status line. */
+function refuse(/** @type {any} */ socket, /** @type {number} */ code, /** @type {string} */ msg) {
+  socket.write(`HTTP/1.1 ${code} ${msg}\r\n\r\n`);
+  socket.destroy();
+}
+
+/** The starting document for a new room: an imported plan (migrated, validated) or a blank board. */
+function initialDoc(/** @type {any} */ plan) {
+  if (plan == null) return { ok: true, plan: createInitialState("2026-01-05") };
+  const m = migratePlan(plan);
+  const v = m.ok ? validatePlan(m.plan) : m;
+  return v.ok ? { ok: true, plan: { ...v.plan, lastReturnedStoryIds: [] } } : v;
+}
+
 /**
- * Start the server. Holds its own room cache + room→sockets index, so each
- * instance (e.g. per test) is isolated.
- *
- * Slice MP1 additions over the spike: `serveStatic` mounts plan's public/ so a
- * browser can load the app AND open the ws from one origin in dev; `seedRoom`
- * creates an open-link dev room if absent (room-creation UI is a later slice).
+ * POST /rooms — authed room creation. A room's company is the creator's session
+ * company, never a client value. The body is parsed only after authentication.
+ * @param {any} app @param {{ db: any, provider: any, limits: typeof LIMITS, now: () => number }} deps
+ */
+function mountCreateRoom(app, { db, provider, limits, now }) {
+  const perUser = createWindowLimiter({ max: limits.roomsPerUserPerHour, windowMs: 60 * 60 * 1000, now });
+  app.post("/rooms", provider.requireAuth, express.json({ limit: limits.maxCreateBodyBytes }), (/** @type {any} */ req, /** @type {any} */ res) => {
+    const companyId = provider.companyOf(req);
+    const userId = provider.userOf(req);
+    if (!companyId || !userId) return res.status(403).json({ error: "no company on session" });
+    const mode = req.body?.mode === "open-link" ? "open-link" : "company-only";
+    const doc = initialDoc(req.body?.plan);
+    if (!doc.ok) return res.status(400).json({ error: doc.reason });
+    if (Buffer.byteLength(JSON.stringify(doc.plan), "utf8") > limits.maxDocBytes) {
+      return res.status(413).json({ error: "the plan is too large" });
+    }
+    if (!perUser.check(userId)) return res.status(429).json({ error: "too many rooms created; try again later" });
+    const id = `${companyId}-${newId("room")}`;
+    const shareToken = newId("share");
+    createRoom(db, { id, companyId, shareToken, mode, doc: doc.plan });
+    perUser.record(userId); // only a room that was actually created counts
+    res.json({ id, companyId, shareToken, mode });
+  });
+}
+
+/**
+ * Start the server. Each instance holds its own hub, so tests are isolated.
+ * `limits` overrides individual LIMITS; `now` is the clock for every limiter.
  * @param {{
  *   db: import("better-sqlite3").Database,
  *   port?: number,
@@ -66,195 +99,31 @@ export function decideUpgrade(room, session, token) {
  *   seedRoom?: { id: string, companyId: string, shareToken: string, mode: string } | null,
  *   auth?: any,
  *   host?: string,
+ *   limits?: Partial<typeof LIMITS>,
+ *   now?: () => number,
  * }} opts
- * @returns {Promise<{ url: string, httpUrl: string, close: () => void }>}
  */
-export async function startSpikeServer({ db, port = 0, serveStatic = false, seedRoom = null, auth = null, host = "127.0.0.1" }) {
+export async function startSpikeServer({ db, port = 0, serveStatic = false, seedRoom = null, auth = null, host = "127.0.0.1", limits: overrides = {}, now = Date.now }) {
   const provider = auth ?? (await createAuthProvider(process.env));
-
+  const limits = { ...LIMITS, ...overrides };
   if (seedRoom && !loadRoom(db, seedRoom.id)) {
     createRoom(db, { ...seedRoom, doc: createInitialState("2026-01-05") });
   }
 
-  // Always an express app: it carries the auth routes (real provider) and the
-  // authed room-creation endpoint; static serving is opt-in. The ws upgrade is
-  // handled separately on the http server, independent of express routing.
   const app = express();
   app.disable("x-powered-by");
-  // Security headers FIRST, so they cover static assets, error responses, and the
-  // ws-upgrade origin. Mirrors the suite hub. See ./middleware/securityHeaders.js.
-  app.use(makeSecurityHeaders());
-  app.use(express.json());
-
-  // Liveness (MP6 R5): unauthed, cheap — for systemd/monitoring.
+  app.use(makeSecurityHeaders()); // first, so headers cover every response
   app.get("/health", (/** @type {any} */ _req, /** @type {any} */ res) => res.json({ ok: true }));
-
   provider.mountRoutes(app);
-
-  // POST /rooms — authed room creation (MP2 R4). A company-only room is scoped to
-  // the MANAGER's session company, never a client-supplied value. Open-link rooms
-  // are also manager-created; only their JOIN policy differs.
-  app.post("/rooms", provider.requireAuth, (/** @type {any} */ req, /** @type {any} */ res) => {
-    const companyId = provider.companyOf(req);
-    if (!companyId) return res.status(403).json({ error: "no company on session" });
-    const mode = req.body?.mode === "open-link" ? "open-link" : "company-only";
-
-    // Optional "import my plan into the room" (MP4 R1): validate with the existing
-    // guard, seed the room doc with it, normalise the transient field. No plan =
-    // an empty starting board.
-    let doc;
-    if (req.body?.plan != null) {
-      const m = migratePlan(req.body.plan);
-      const v = m.ok ? validatePlan(m.plan) : m;
-      if (!v.ok) return res.status(400).json({ error: v.reason });
-      doc = { ...v.plan, lastReturnedStoryIds: [] };
-    } else {
-      doc = createInitialState("2026-01-05");
-    }
-
-    const id = `${companyId}-${newId("room")}`;
-    const shareToken = newId("share");
-    createRoom(db, { id, companyId, shareToken, mode, doc });
-    res.json({ id, companyId, shareToken, mode });
-  });
-
+  mountCreateRoom(app, { db, provider, limits, now });
   if (serveStatic) app.use(express.static(pathJoin(__dirname, "..", "public")));
 
   const httpServer = createServer(app);
-  const wss = new WebSocketServer({ noServer: true });
-
-  /** @type {Map<string, any>} authoritative in-memory rooms */
-  const rooms = new Map();
-  /** @type {Map<string, Set<import("ws").WebSocket>>} room id -> sockets */
-  const sockets = new Map();
-
-  const getRoom = (id) => {
-    if (!rooms.has(id)) {
-      const r = loadRoom(db, id);
-      if (r) rooms.set(id, r);
-    }
-    return rooms.get(id);
-  };
-  const join = (id, ws) => {
-    if (!sockets.has(id)) sockets.set(id, new Set());
-    sockets.get(id).add(ws);
-  };
-  const leave = (id, ws) => sockets.get(id)?.delete(ws);
-  const broadcast = (id, msg) => {
-    const json = JSON.stringify(msg);
-    for (const ws of sockets.get(id) ?? []) ws.send(json);
-  };
-  // Fan out to everyone in the room EXCEPT the sender. Used by the ephemeral
-  // cursor relay (R1) so a client never receives its own cursor — nothing to
-  // filter client-side.
-  const broadcastExcept = (id, sender, msg) => {
-    const json = JSON.stringify(msg);
-    for (const ws of sockets.get(id) ?? []) if (ws !== sender) ws.send(json);
-  };
-  // Presence (MP5): the room's current participants, server-derived from the
-  // socket set, broadcast on join/leave. Per-connection; never plan state.
-  const broadcastPresence = (id) => {
-    const participants = [...(sockets.get(id) ?? [])].map((ws) => {
-      const m = /** @type {any} */ (ws).meta;
-      // colour (phase2-build5, R3): server-assigned at connection, carried here so
-      // a participant's avatar and their cursor read the ONE colour and match by
-      // construction. Pure presence — never plan state.
-      return { id: m.id, name: m.name, identity: m.identity, colour: m.colour };
-    });
-    broadcast(id, { type: "presence", participants });
-  };
-
-  httpServer.on("upgrade", (req, socket, head) => {
-    socket.on("error", (e) => console.error("upgrade socket error:", e.message));
-    handleUpgrade(req, socket, head).catch((e) => {
-      console.error("ws upgrade failed:", e);
-      socket.destroy();
-    });
-  });
-
-  const handleUpgrade = async (req, socket, head) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const roomId = url.searchParams.get("room") ?? "";
-    const token = url.searchParams.get("token");
-    const name = url.searchParams.get("name") ?? "guest";
-    const room = getRoom(roomId);
-    const session = await provider.verifySession(req.headers);
-
-    const decision = decideUpgrade(room, session, token);
-    if (!decision.ok) {
-      socket.write(`HTTP/1.1 ${decision.code} ${decision.msg}\r\n\r\n`);
-      socket.destroy();
-      return;
-    }
-
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      // colour (phase2-build5, R3): the lowest palette index not in use by a
-      // connected socket in this room, so a leaver's colour is reused before a new
-      // one and two participants never collide (below palette size). Computed
-      // BEFORE join() so the new socket isn't counted against itself.
-      const used = [...(sockets.get(roomId) ?? [])].map((s) => /** @type {any} */ (s).meta.colourIndex);
-      const colourIndex = pickColourIndex(used, PALETTE.length);
-      /** @type {any} */ (ws).meta = {
-        roomId, identity: decision.identity, name, session, id: newId("p"),
-        colourIndex, colour: paletteColour(colourIndex),
-      };
-      join(roomId, ws);
-      wss.emit("connection", ws, req);
-    });
-  };
-
-  wss.on("connection", (ws) => {
-    const { roomId, identity } = /** @type {any} */ (ws).meta;
-    const room = getRoom(roomId);
-    // First frame: the authoritative state + this participant's identity tag.
-    ws.send(JSON.stringify({ type: "state", doc: room.doc, version: room.version, identity }));
-    broadcastPresence(roomId); // tell the room (incl. the new joiner) who's here
-
-    ws.on("error", (e) => console.error("ws socket error:", e.message));
-    ws.on("message", (data) => {
-      try {
-        handleMessage(ws, roomId, room, data);
-      } catch (e) {
-        console.error("ws message handling failed:", e);
-      }
-    });
-
-    ws.on("close", () => { leave(roomId, ws); broadcastPresence(roomId); });
-  });
-
-  const handleMessage = (ws, roomId, room, data) => {
-    let msg;
-    try { msg = JSON.parse(data.toString()); } catch { return; }
-    if (msg === null || typeof msg !== "object" || Array.isArray(msg)) return;
-
-    // Ephemeral cursor relay (phase2-build5, R1): a pure side-channel. Stamp the
-    // sender's stable id and fan out to the OTHER sockets only; NEVER applyOp,
-    // NEVER touch room.doc/room.version, NEVER commit. The relayed frame is
-    // RECONSTRUCTED from {id, x/y | gone} — never the raw client object — and a
-    // position with non-finite coords is dropped, not forwarded.
-    if (msg.type === "cursor") {
-      const id = /** @type {any} */ (ws).meta.id;
-      if (msg.gone === true) {
-        broadcastExcept(roomId, ws, { type: "cursor", id, gone: true });
-      } else if (Number.isFinite(msg.x) && Number.isFinite(msg.y)) {
-        broadcastExcept(roomId, ws, { type: "cursor", id, x: msg.x, y: msg.y });
-      }
-      return;
-    }
-
-    if (msg.type !== "op") return;
-    // Echoed in the ack/nack, so bound it before anything commits.
-    if (typeof msg.opId !== "string" || msg.opId.length > 64) return;
-
-    const result = applyOp(db, room, { type: msg.op?.type, payload: msg.op?.payload });
-    if (result.ok) {
-      // Broadcast the EFFECTIVE op (the merged full-field payload for EDIT_STORY),
-      // so every client reduces a complete payload (MP3 R4).
-      broadcast(roomId, { type: "op", opId: msg.opId, op: result.op, version: result.version });
-    } else {
-      ws.send(JSON.stringify({ type: "nack", opId: msg.opId, reason: result.reason }));
-    }
-  };
+  // autoPong off: pongs go through the hub's backlog guard like every other send.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: limits.maxFrameBytes, autoPong: false });
+  const hub = createRoomHub({ db, limits });
+  const ctx = { db, provider, limits, now, hub, wss };
+  attachUpgrades(httpServer, ctx);
 
   return new Promise((resolve) => {
     httpServer.listen(port, host, () => {
@@ -263,8 +132,145 @@ export async function startSpikeServer({ db, port = 0, serveStatic = false, seed
       resolve({
         url: `ws://${reachHost}:${addr.port}`,
         httpUrl: `http://${reachHost}:${addr.port}`,
-        close: () => { wss.close(); httpServer.close(); },
+        close: () => { wss.close(); httpServer.close(); httpServer.closeAllConnections(); },
+        cacheSize: hub.cacheSize,
+        socketCount: hub.socketCount,
       });
     });
   });
+}
+
+/**
+ * The upgrade path, cheapest checks first: a process-wide rate bucket and the
+ * pending ceiling (no db/auth work), then metadata-only authorization, then a
+ * capacity reservation, and only then the handshake and the room document.
+ * @param {import("node:http").Server} httpServer @param {any} ctx
+ */
+function attachUpgrades(httpServer, ctx) {
+  const { db, provider, limits, now } = ctx;
+  const bucket = createTokenBucket({ rate: limits.upgradeRate, burst: limits.upgradeBurst, now });
+  let pending = 0;
+
+  const authorize = async (/** @type {any} */ req) => {
+    try {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const roomId = url.searchParams.get("room") ?? "";
+      const name = (url.searchParams.get("name") ?? "").trim().slice(0, limits.maxNameLength) || "guest";
+      const meta = loadRoomMeta(db, roomId);
+      const session = await provider.verifySession(req.headers);
+      return { roomId, name, session, decision: decideUpgrade(meta, session, url.searchParams.get("token")) };
+    } finally {
+      pending--;
+    }
+  };
+
+  httpServer.on("upgrade", (req, socket, head) => {
+    socket.on("error", (e) => console.error("upgrade socket error:", e.message));
+    if (!bucket.take() || pending >= limits.maxPendingUpgrades) return refuse(socket, 503, "Busy");
+    pending++;
+    authorize(req)
+      .then((a) => admit(ctx, a, req, socket, head))
+      .catch((e) => { console.error("ws upgrade failed:", e); socket.destroy(); });
+  });
+}
+
+/** Admit an authorized upgrade into a reserved slot and attach it to its room. */
+function admit(/** @type {any} */ ctx, /** @type {any} */ a, /** @type {any} */ req, /** @type {any} */ socket, /** @type {any} */ head) {
+  const { hub, wss } = ctx;
+  if (!a.decision.ok) return refuse(socket, a.decision.code, a.decision.msg);
+  if (socket.destroyed) return;
+  if (!hub.reserve(a.roomId)) return refuse(socket, 503, "Room Full");
+  let attached = false;
+  socket.once("close", () => { if (!attached) hub.release(a.roomId); });
+  wss.handleUpgrade(req, socket, head, (/** @type {any} */ ws) => {
+    attached = true;
+    let room;
+    try {
+      room = hub.attach(a.roomId, ws);
+    } catch (e) {
+      console.error(`room ${a.roomId} could not be loaded:`, e);
+      hub.release(a.roomId);
+      ws.terminate();
+      return;
+    }
+    ws.meta = participantMeta(ctx, a, ws);
+    onConnection(ctx, ws, room);
+  });
+}
+
+/** Per-connection identity, colour and rate buckets. */
+function participantMeta(/** @type {any} */ { hub, limits, now }, /** @type {any} */ a, /** @type {any} */ ws) {
+  // The lowest palette index no other participant holds, so a leaver's colour
+  // is reused first and two participants never collide below palette size.
+  const used = hub.members(a.roomId).filter((/** @type {any} */ s) => s !== ws).map((/** @type {any} */ s) => s.meta.colourIndex);
+  const colourIndex = pickColourIndex(used, PALETTE.length);
+  return {
+    roomId: a.roomId, identity: a.decision.identity, name: a.name, session: a.session, id: newId("p"),
+    colourIndex, colour: paletteColour(colourIndex),
+    opBucket: createTokenBucket({ rate: limits.opRate, burst: limits.opBurst, now }),
+    cursorBucket: createTokenBucket({ rate: limits.cursorRate, burst: limits.cursorBurst, now }),
+    cursorVisible: false,
+  };
+}
+
+/** The room's participants, server-derived from its sockets; never plan state. */
+function broadcastPresence(/** @type {any} */ hub, /** @type {string} */ roomId) {
+  const participants = hub.members(roomId).map((/** @type {any} */ ws) => {
+    const m = ws.meta;
+    return { id: m.id, name: m.name, identity: m.identity, colour: m.colour };
+  });
+  hub.broadcast(roomId, { type: "presence", participants });
+}
+
+function onConnection(/** @type {any} */ ctx, /** @type {any} */ ws, /** @type {any} */ room) {
+  const { hub } = ctx;
+  const { roomId, identity } = ws.meta;
+  hub.send(ws, { type: "state", doc: room.doc, version: room.version, identity });
+  broadcastPresence(hub, roomId);
+  ws.on("error", (/** @type {Error} */ e) => console.error("ws socket error:", e.message));
+  ws.on("ping", (/** @type {Buffer} */ data) => hub.pong(ws, data));
+  ws.on("message", (/** @type {any} */ data) => {
+    try {
+      handleMessage(ctx, ws, room, data);
+    } catch (e) {
+      console.error("ws message handling failed:", e);
+    }
+  });
+  ws.on("close", () => { hub.detach(roomId, ws); broadcastPresence(hub, roomId); });
+}
+
+/**
+ * Ephemeral cursor relay to the OTHER sockets: never touches the document. The
+ * frame is rebuilt from {id, x, y | gone}. Positions spend the cursor bucket; a
+ * 'gone' is relayed only for a cursor that is currently visible, so repeated
+ * 'gone' frames cannot flood the room.
+ */
+function relayCursor(/** @type {any} */ hub, /** @type {any} */ ws, /** @type {any} */ msg) {
+  const m = ws.meta;
+  if (msg.gone === true) {
+    if (!m.cursorVisible) return;
+    m.cursorVisible = false;
+    hub.broadcast(m.roomId, { type: "cursor", id: m.id, gone: true }, ws);
+    return;
+  }
+  if (!Number.isFinite(msg.x) || !Number.isFinite(msg.y) || !m.cursorBucket.take()) return;
+  m.cursorVisible = true;
+  hub.broadcast(m.roomId, { type: "cursor", id: m.id, x: msg.x, y: msg.y }, ws);
+}
+
+function handleMessage(/** @type {any} */ { db, hub, limits }, /** @type {any} */ ws, /** @type {any} */ room, /** @type {any} */ data) {
+  let msg;
+  try { msg = JSON.parse(data.toString()); } catch { return; }
+  if (msg === null || typeof msg !== "object" || Array.isArray(msg)) return;
+  if (msg.type === "cursor") return relayCursor(hub, ws, msg);
+  // opId is echoed in the ack/nack, so bound it before anything commits.
+  if (msg.type !== "op" || typeof msg.opId !== "string" || msg.opId.length > 64) return;
+  const nack = (/** @type {string} */ reason) => hub.send(ws, { type: "nack", opId: msg.opId, reason });
+  if (!ws.meta.opBucket.take()) return nack("too many changes, slow down");
+
+  const result = applyOp(db, room, { type: msg.op?.type, payload: msg.op?.payload }, limits);
+  // The EFFECTIVE op is broadcast (the merged full payload for EDIT_STORY), so
+  // every client reduces a complete payload.
+  if (result.ok) hub.broadcast(ws.meta.roomId, { type: "op", opId: msg.opId, op: result.op, version: result.version });
+  else nack(result.reason);
 }

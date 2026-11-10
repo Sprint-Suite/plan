@@ -54,6 +54,16 @@ export function createRoom(db, { id, companyId, shareToken, mode, doc }) {
 }
 
 /**
+ * A room's access metadata only, without reading or parsing its document, for
+ * authorizing a join before anything heavier happens.
+ * @returns {{ id: string, companyId: string, shareToken: string, mode: string } | null}
+ */
+export function loadRoomMeta(db, id) {
+  const r = /** @type {any} */ (db.prepare("SELECT id, company_id, share_token, mode FROM rooms WHERE id = ?").get(id));
+  return r ? { id: r.id, companyId: r.company_id, shareToken: r.share_token, mode: r.mode } : null;
+}
+
+/**
  * Re-hydrate a room (and its document + version) from the row. The document is
  * migrated to the current schema here; the upgraded form is persisted by the
  * room's next commit. Throws if the stored document cannot be migrated.
