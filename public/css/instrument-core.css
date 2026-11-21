@@ -103,3 +103,13 @@
   .ins .checks{display:flex; flex-direction:column; gap:9px;}
   .ins .check{display:flex; align-items:center; gap:9px; font-size:14px; color:var(--ink); cursor:pointer;}
   .ins .check input{width:16px; height:16px; accent-color:var(--green);}
+  /* Licence popup (licence-modal.js). Padding sits on the parts so a click on the dialog itself is a backdrop click. */
+  .ins dialog.licence-modal{margin:auto; padding:0; width:min(760px, calc(100vw - 32px)); max-height:calc(100dvh - 32px); border:1px solid var(--line2); border-radius:12px; background:var(--panel); color:var(--ink); box-shadow:0 30px 70px -40px oklch(0.3 0.05 240 / 0.8);}
+  .ins dialog.licence-modal[open]{display:flex; flex-direction:column;}
+  .ins dialog.licence-modal::backdrop{background:oklch(0.235 0.013 250 / 0.35); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);}
+  .ins .licence-modal__head{padding:22px 26px 12px; border-bottom:1px solid var(--line);}
+  .ins .licence-modal__head h2{font-size:22px; outline:none;}
+  .ins .licence-modal__meta{margin-top:4px; font-size:13px; color:var(--faint);}
+  .ins .licence-modal__body{overflow:auto; padding:18px 26px; min-height:0;}
+  .ins .licence-modal__body p{font-size:15px; line-height:1.65; margin-bottom:14px; max-width:74ch;}
+  .ins .licence-modal__foot{display:flex; justify-content:flex-end; padding:12px 26px 18px; border-top:1px solid var(--line);}
